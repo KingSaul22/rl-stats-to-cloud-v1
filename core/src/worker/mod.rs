@@ -4,7 +4,7 @@ use crate::config::AppConfig;
 use crate::connector::{SinkError, TelemetrySink};
 use futures_util::StreamExt;
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
@@ -15,7 +15,7 @@ use tokio::time::{sleep, timeout};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{info, warn};
 use url::Url;
 
 mod actors;
@@ -62,6 +62,18 @@ struct RoutingStats {
     live_state_drops: u64,
     event_feed_losses: u64,
     historical_overflows: u64,
+}
+
+struct SentinelGuard {
+    arc: Arc<RwLock<String>>,
+}
+
+impl Drop for SentinelGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.arc.write() {
+            guard.clear(); // Reset "\0" -> "" on panic unwind
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -664,6 +676,91 @@ impl RocketLeagueWorker {
         }
 
         session_context.update_from_payload(&parsed);
+
+        if session_context.active_match_id != previous_match_id {
+            if let Ok(mut guard) = session_context.blue_team_id.write() {
+                *guard = None;
+            }
+            if let Ok(mut guard) = session_context.orange_team_id.write() {
+                *guard = None;
+            }
+            if let Ok(mut guard) = session_context.teams_resolved_for_match.write() {
+                guard.clear();
+            }
+        }
+
+        let needs_resolution = session_context.teams_resolved_for_match.try_read().is_ok_and(|guard| {
+            *guard != session_context.active_match_id && !guard.starts_with('\0')
+        });
+
+        if needs_resolution {
+            let players_val = transformer::extract_player_telemetry(&parsed);
+            if let Some(players) = players_val.as_object()
+                && !players.is_empty()
+            {
+                let mut blue_ids = Vec::new();
+                let mut orange_ids = Vec::new();
+                for (id, data) in players {
+                    if let Some(team) = data.get("team").and_then(Value::as_u64) {
+                        if team == 0 {
+                            blue_ids.push(id.clone());
+                        } else if team == 1 {
+                            orange_ids.push(id.clone());
+                        }
+                    }
+                }
+
+                if !blue_ids.is_empty() || !orange_ids.is_empty() {
+                    if let Ok(mut guard) = session_context.teams_resolved_for_match.write() {
+                        *guard = "\0".to_string();
+                    }
+
+                    let sink = Arc::clone(sink);
+                    let blue_team_id_arc = Arc::clone(&session_context.blue_team_id);
+                    let orange_team_id_arc = Arc::clone(&session_context.orange_team_id);
+                    let resolved_arc = Arc::clone(&session_context.teams_resolved_for_match);
+                    let match_id = session_context.active_match_id.clone();
+                    let shutdown_clone = shutdown.clone();
+
+                    tokio::spawn(async move {
+                        let sentinel = SentinelGuard {
+                            arc: Arc::clone(&resolved_arc),
+                        };
+
+                        let (blue, orange) = futures_util::future::join(
+                            aggregation::resolve_team_id(
+                                &sink,
+                                &blue_ids,
+                                &match_id,
+                                "blue",
+                                &shutdown_clone,
+                            ),
+                            aggregation::resolve_team_id(
+                                &sink,
+                                &orange_ids,
+                                &match_id,
+                                "orange",
+                                &shutdown_clone,
+                            ),
+                        )
+                        .await;
+
+                        if let Ok(mut guard) = blue_team_id_arc.write() {
+                            *guard = Some((match_id.clone(), blue.clone()));
+                        }
+                        if let Ok(mut guard) = orange_team_id_arc.write() {
+                            *guard = Some((match_id.clone(), orange.clone()));
+                        }
+                        if let Ok(mut guard) = resolved_arc.write() {
+                            guard.clone_from(&match_id);
+                        }
+                        std::mem::forget(sentinel);
+                        info!("Team inference completed: match={} blue={} orange={}", match_id, blue, orange);
+                    });
+                }
+            }
+        }
+
         self.set_last_event(event_name);
         *sequence = sequence.saturating_add(1);
         let class = Self::classify_event(&parsed_event);

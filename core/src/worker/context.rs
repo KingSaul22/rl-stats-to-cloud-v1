@@ -1,12 +1,17 @@
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use std::sync::{Arc, RwLock};
+
 #[derive(Debug, Clone)]
 pub struct SessionContext {
     pub(crate) active_match_id: String,
     pub(crate) active_session_id: String,
     pub(crate) id_source: String,
     pub(crate) in_replay: bool,
+    pub(crate) blue_team_id: Arc<RwLock<Option<(String, String)>>>,
+    pub(crate) orange_team_id: Arc<RwLock<Option<(String, String)>>>,
+    pub(crate) teams_resolved_for_match: Arc<RwLock<String>>,
 }
 
 impl SessionContext {
@@ -17,6 +22,9 @@ impl SessionContext {
             active_session_id: String::new(),
             id_source: "Generated".to_string(),
             in_replay: false,
+            blue_team_id: Arc::new(RwLock::new(None)),
+            orange_team_id: Arc::new(RwLock::new(None)),
+            teams_resolved_for_match: Arc::new(RwLock::new(String::new())),
         };
 
         if let Some(match_id) = config_match_id

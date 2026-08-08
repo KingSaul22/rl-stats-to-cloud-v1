@@ -416,7 +416,7 @@ async fn update_cumulative_stats(
     }
 }
 
-async fn resolve_team_id(
+pub async fn resolve_team_id(
     sink: &Arc<dyn TelemetrySink + Send + Sync>,
     sanitized_ids: &[String],
     match_id: &str,

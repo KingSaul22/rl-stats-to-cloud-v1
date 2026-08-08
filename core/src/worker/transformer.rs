@@ -85,6 +85,20 @@ pub fn normalize_live_state(raw: &Value, session_context: &SessionContext) -> Va
     if let Some(arena) = extract_string_from_keys(raw, &["Arena", "arena"]) {
         payload.insert("arena".to_string(), Value::String(arena));
     }
+
+    if let Ok(guard) = session_context.blue_team_id.try_read()
+        && let Some((match_id, id)) = guard.as_ref()
+        && match_id == &session_context.active_match_id
+    {
+        payload.insert("blue_team_id".to_string(), Value::String(id.clone()));
+    }
+    if let Ok(guard) = session_context.orange_team_id.try_read()
+        && let Some((match_id, id)) = guard.as_ref()
+        && match_id == &session_context.active_match_id
+    {
+        payload.insert("orange_team_id".to_string(), Value::String(id.clone()));
+    }
+
     Value::Object(payload)
 }
 
