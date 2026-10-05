@@ -2,6 +2,10 @@
 
 A Rust workspace designed for reliable, high-performance Rocket League telemetry ingestion over a multi-lane pipeline. It synchronizes live state, event feeds, historical match data, and cumulative team statistics to Firebase — paired with a Tauri v2 desktop UI for real-time monitoring and configuration.
 
+## The future
+
+This project will be archived as a new revised version is being developed. When the times comes, this README will be updated with a link to the new version.
+
 ## Status
 
 **Feature-complete (TFG Release).** The core daemon architecture is stable and focuses on:
